@@ -482,6 +482,14 @@ button:focus,button:active{outline:none}
 .emoji-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:12px}
 .emoji-cell{font-size:22px;padding:8px 0;border:1px solid var(--line);border-radius:10px;background:#fff;line-height:1}
 .emoji-cell.on{border-color:var(--theme);background:#eef5fb}
+.stg-box{padding:2px 2px 0}
+.stg-line{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:13px;color:#5f6f82}
+.stg-line b{font-size:15px;color:#243244}
+.stg-bar{height:8px;border-radius:6px;background:#e8eff7;overflow:hidden;margin:9px 0 6px}
+.stg-bar i{display:block;height:100%;background:var(--theme,#4d80a1);border-radius:6px}
+.stg-sub{font-size:12px;color:#7b8a9d}
+.stg-top{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.stg-top span{font-size:11px;color:#5f6f82;background:#f1f5fa;border-radius:8px;padding:3px 7px}
 .page-dots{position:absolute;left:0;right:0;bottom:calc(82px + env(safe-area-inset-bottom));z-index:22;
   display:flex;justify-content:center;gap:9px}
 .page-dots button{position:relative;width:7px;height:7px;border-radius:50%;border:none;
@@ -1658,18 +1666,67 @@ const clampNum = (v, min, max, def) => {
 };
 
 /* ---------------- 存储 ---------------- */
+const Store = {
+  mem: {}, db: null, ok: false,
+  open() {
+    return new Promise(res => {
+      if (!('indexedDB' in window)) { res(false); return; }
+      let req;
+      try { req = indexedDB.open('xubing_store', 1); } catch (e) { res(false); return; }
+      req.onupgradeneeded = () => { try { req.result.createObjectStore('kv'); } catch (e) {} };
+      req.onsuccess = () => { this.db = req.result; this.ok = true; res(true); };
+      req.onerror = () => res(false);
+    });
+  },
+  async load() {
+    await this.open();
+    if (this.ok && this.db) {
+      try {
+        const store = this.db.transaction('kv', 'readonly').objectStore('kv');
+        const keys = await new Promise((res, rej) => { const r = store.getAllKeys(); r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error); });
+        const vals = await new Promise((res, rej) => { const r = store.getAll(); r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error); });
+        keys.forEach((k, i) => { this.mem[k] = vals[i]; });
+      } catch (e) {}
+    }
+    for (let i = 0; i < localStorage.length; i++) {
+      const full = localStorage.key(i);
+      if (!full || full.indexOf('xubing_') !== 0) continue;
+      const k = full.slice(7);
+      if (k in this.mem) continue;
+      try {
+        this.mem[k] = JSON.parse(localStorage.getItem(full));
+        this.put(k, this.mem[k]);
+      } catch (e) {}
+    }
+  },
+  put(k, v) {
+    if (!this.ok || !this.db) {
+      try { localStorage.setItem('xubing_' + k, JSON.stringify(v)); } catch (e) { toast('存储空间不足，这一条没保存'); }
+      return;
+    }
+    try {
+      const t = this.db.transaction('kv', 'readwrite');
+      t.objectStore('kv').put(v, k);
+      t.onabort = () => toast('存储空间不足，这一条没保存');
+    } catch (e) { toast('存储空间不足，这一条没保存'); }
+  },
+  size() {
+    let total = 0;
+    Object.keys(this.mem).forEach(k => {
+      try { total += new Blob([JSON.stringify(this.mem[k])]).size; } catch (e) {}
+    });
+    return total;
+  }
+};
 const DB = {
   get(key, def) {
-    try {
-      const raw = localStorage.getItem('xubing_' + key);
-      if (raw == null) return def;
-      const v = JSON.parse(raw);
-      return (v === null || v === undefined) ? def : v;
-    } catch (e) { return def; }
+    const v = Store.mem[key];
+    return (v === undefined || v === null) ? def : v;
   },
   set(key, val) {
-    try { localStorage.setItem('xubing_' + key, JSON.stringify(val)); return true; }
-    catch (e) { toast('存储空间不足，这一条没保存'); return false; }
+    Store.mem[key] = val;
+    Store.put(key, val);
+    return true;
   }
 };
 const asArray = v => Array.isArray(v) ? v.filter(x => x && typeof x === 'object') : [];
@@ -3217,11 +3274,15 @@ function renderSetContent() {
       + '<input type="file" id="importFile" accept=".json,application/json" style="display:none">'
       + setRow('导入聊天记录', '<button class="mini" id="setImportChat" type="button">选择文件</button>')
       + '<input type="file" id="chatImportFile" accept=".json,application/json" style="display:none">'
-      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v20 · 2026-11-15</div>'
+      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v21 · 2026-11-15</div>'
+      + '</div>'
+      + '<div class="set-card" style="margin-top:10px"><div class="beauty-h">存储空间</div>'
+      + '<div class="stg-box" id="setStorage"><div class="set-tip">计算中…</div></div>'
       + '</div>';
     tip = '清空只作用于本机；「全部导出」会把聊天、字卡、资产、朋友圈等打包成 JSON。「导入聊天记录」支持本空间备份，也支持 mochi 导出的聊天 json（图片和表情会跳过）。';
   }
   box.innerHTML = html;
+  if (setCat === 'data') paintStorageInfo();
   const tipEl = $('setTip');
   if (tipEl) tipEl.textContent = tip;
 
@@ -5077,13 +5138,46 @@ function scheduleIdentity() {
   }, (40 * 60000 + Math.random() * 50 * 60000));
 }
 
+/* ---------------- 存储信息 ---------------- */
+function storageMb(x) {
+  const n = Number(x) || 0;
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(n > 50 * 1024 * 1024 ? 0 : 1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+  return n + ' B';
+}
+async function paintStorageInfo() {
+  const el = $('setStorage');
+  if (!el) return;
+  const total = Store.size();
+  const n = Object.keys(Store.mem).length;
+  let est = null;
+  try { if (navigator.storage && navigator.storage.estimate) est = await navigator.storage.estimate(); } catch (e) {}
+  let html = '<div class="stg-line"><b>本空间数据 ' + storageMb(total) + '</b><span>' + n + ' 项</span></div>';
+  if (est && est.quota) {
+    const used = est.usage || 0, quota = est.quota;
+    const pct = Math.min(100, used / quota * 100);
+    html += '<div class="stg-bar"><i style="width:' + pct.toFixed(1) + '%"></i></div>'
+      + '<div class="stg-sub">浏览器已用 ' + storageMb(used) + ' / 总量 ' + storageMb(quota) + '</div>';
+  } else {
+    html += '<div class="stg-sub">浏览器没有提供容量信息，本地数据库不受 5MB 限制</div>';
+  }
+  const top = Object.keys(Store.mem).map(k => {
+    let size = 0;
+    try { size = new Blob([JSON.stringify(Store.mem[k])]).size; } catch (e) {}
+    return [k, size];
+  }).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  if (top.length) {
+    html += '<div class="stg-top">' + top.map(t => '<span>' + esc(t[0]) + ' ' + storageMb(t[1]) + '</span>').join('') + '</div>';
+  }
+  el.innerHTML = html;
+}
+
 /* ---------------- 全部导出 / 导入 ---------------- */
 function exportAllData() {
   const dump = { app: 'xubing', version: 1, ts: Date.now(), data: {} };
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (k && k.indexOf('xubing_') === 0) dump.data[k] = localStorage.getItem(k);
-  }
+  Object.keys(Store.mem).forEach(k => {
+    try { dump.data['xubing_' + k] = JSON.stringify(Store.mem[k]); } catch (e) {}
+  });
   try {
     const blob = new Blob([JSON.stringify(dump)], { type: 'application/json' });
     const a = document.createElement('a');
@@ -5106,7 +5200,10 @@ function importAllData(file) {
     if (!keys.length) { toast('文件里没有这个空间的数据'); return; }
     popupNotice('全部导入', '会用文件里的 ' + keys.length + ' 项数据覆盖这台机器上的当前空间，导入后页面会刷新。', [
       { label: '覆盖导入', fn: () => {
-          keys.forEach(k => localStorage.setItem(k, data[k]));
+          keys.forEach(k => {
+            const short = k.slice(7);
+            try { Store.mem[short] = JSON.parse(data[k]); Store.put(short, Store.mem[short]); } catch (e) {}
+          });
           location.reload();
         } },
       { label: '取消' }
@@ -6322,7 +6419,7 @@ function bindEvents() {
   $('btnDial').onclick = () => startCall('out');
 }
 
-init();
+(async () => { await Store.load(); init(); })();
 </script>
 </body>
 </html>
