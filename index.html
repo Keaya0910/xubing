@@ -1756,7 +1756,7 @@ const DEFAULT_SETTINGS = {
   loveStartDate: '2023-05-21', loveDays: '520',
   replyCount: 1, delayMinSec: 8, delayMaxSec: 90,
   proMsgPct: 12, packetPct: 6, callPct: 4, todoRemindPct: 10, surveyPct: 5, surveyDelaySec: 8,
-  shopPayPct: 18, askMoneyPct: 6, nudgeBackPct: 60, nudgePct: 4, payCardKind: 'cards',
+  shopPayPct: 18, askMoneyPct: 6, nudgeBackPct: 60, nudgePct: 4, stickerPct: 8, payCardKind: 'cards',
   joinCards: true, joinCount: 2, cycleDays: 28, periodLen: 5, residuePct: 4,
   ghostPct: 12, postPct: 8, invitePct: 40, letterGapMin: 240, letterPct: 60, letterMin: 2, letterMax: 4,
   bubbleColor: '#4d80a1', themBubbleColor: '#ffffff', homeTop: '#a9c6da', homeBot: '#ffffff', bubbleRadius: 14, fontScale: 100,
@@ -2286,7 +2286,7 @@ function pushMessage(m) {
     const preview = msgSearchText(m) || m.text || '发来一条消息';
     playDing();
     dingNotice(preview);
-    if (!isChatOpen()) maybeNotify('chat', settings.themName || '他', preview);
+    if (document.hidden || !isChatOpen()) maybeNotify('chat', settings.themName || '他', preview);
   }
   if (companion.on && $('pcLayer') && !$('pcLayer').classList.contains('hidden')) renderPcMsgs();
   if (messages.length >= 6 && messages.length % 9 === 0) {
@@ -3051,6 +3051,7 @@ function tickAuto() {
   if (r < acc) { startCall('in'); return; }
   acc += pp; if (r < acc) { receivePacket(); return; }
   acc += pct(settings.nudgePct); if (r < acc) { themNudge(); return; }
+  acc += pct(settings.stickerPct); if (r < acc) { themSticker(); return; }
   acc += pv; if (r < acc) { proactiveSurvey(); return; }
   acc += pt; if (r < acc) { remindTodo(); return; }
   acc += ps; if (r < acc) { if (cart.length) { themPayCart(); return; } }
@@ -3067,6 +3068,12 @@ function themNudge() {
   const pool = data.nudges.filter(n => n.text && String(n.text).trim());
   const it = pool.length ? pickRandom(pool) : null;
   pushMessage({ id: uid(), sender: 'them', type: 'nudge', text: it ? it.text : '', ts: Date.now() });
+}
+function themSticker() {
+  const pool = (stickers || []).filter(s => s && s.src);
+  if (!pool.length) return;
+  const it = pickRandom(pool);
+  pushMessage({ id: uid(), sender: 'them', type: 'image', src: it.src, sticker: true, ts: Date.now() });
 }
 function autoMessage() {
   const pool = getReplyPool();
@@ -3287,8 +3294,9 @@ function renderSetContent() {
       + setRow('陪伴主动邀请', setNum('setInvitePct', Number(settings.invitePct) || 0, 0, 100))
       + setRow('被拍后回拍', setNum('setNudgePct', Number(settings.nudgeBackPct) || 0, 0, 100))
       + setRow('主动拍我', setNum('setNudgeInPct', Number(settings.nudgePct) || 0, 0, 100))
+      + setRow('主动发表情包', setNum('setStickerPct', Number(settings.stickerPct) || 0, 0, 100))
       + '</div>';
-    tip = '每 30–80 秒判定一次，单位是 %。写 0 就是不让 TA 主动做这件事；「被拍后回拍」只在你拍完他之后判定，「主动拍我」是他自己来拍你。';
+    tip = '每 30–80 秒判定一次，单位是 %。写 0 就是不让 TA 主动做这件事；「被拍后回拍」只在你拍完他之后判定，「主动拍我」是他自己来拍你，「主动发表情包」会从你导入的表情里随机发一张。';
   } else if (setCat === 'shop') {
     const kindOpts = Object.keys(KIND_META).map(k =>
       '<option value="' + k + '"' + (settings.payCardKind === k ? ' selected' : '') + '>' + KIND_META[k].label + '</option>').join('');
@@ -3340,7 +3348,7 @@ function renderSetContent() {
       + '<input type="file" id="importFile" accept=".json,application/json" style="display:none">'
       + setRow('导入聊天记录', '<button class="mini" id="setImportChat" type="button">选择文件</button>')
       + '<input type="file" id="chatImportFile" accept=".json,application/json" style="display:none">'
-      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v28 · 2026-11-15</div>'
+      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v29 · 2026-11-15</div>'
       + '</div>'
       + '<div class="set-card" style="margin-top:10px"><div class="beauty-h">存储空间</div>'
       + '<div class="stg-box" id="setStorage"><div class="set-tip">计算中…</div></div>'
@@ -3390,17 +3398,24 @@ function renderSetContent() {
   if (icf) icf.onchange = () => { if (icf.files && icf.files[0]) importChatLog(icf.files[0]); };
   const np = $('btnNotifPerm');
   if (np) {
-    const paint = () => {
+    const paint = async () => {
       if (!('Notification' in window)) { np.textContent = '不支持'; return; }
-      np.textContent = Notification.permission === 'granted' ? '已开启' : (Notification.permission === 'denied' ? '被拒绝' : '开启');
+      if (Notification.permission === 'denied') { np.textContent = '被拒绝'; return; }
+      if (Notification.permission !== 'granted') { np.textContent = '开启'; return; }
+      if (!('serviceWorker' in navigator)) { np.textContent = '已开启'; return; }
+      let reg = null;
+      try { reg = await navigator.serviceWorker.getRegistration(); } catch (e) {}
+      np.textContent = reg ? '已开启' : '缺 sw.js';
     };
     paint();
     np.onclick = async () => { await requestNotifPermission(); paint(); };
   }
   const nt = $('btnNotifTest');
-  if (nt) nt.onclick = () => {
-    requestNotifPermission();
-    maybeNotify('chat', '测试通知', '这是一条来自私密空间的通知');
+  if (nt) nt.onclick = async () => {
+    const p = await requestNotifPermission();
+    if (p !== 'granted') { toast('通知没弹出：权限没放开'); return; }
+    const ok = await showSystemNotif('测试通知', '这是一条来自私密空间的通知');
+    toast(ok ? '已发出，去通知栏看看' : '没弹出：网页目录里还缺 sw.js（安卓必需）');
   };
   const sdEl = $('setDate');
   if (sdEl) sdEl.addEventListener('change', () => { const dd = $('setDays'); if (dd) dd.value = ''; });
@@ -3460,6 +3475,7 @@ function collectSettings() {
   if (g('setPostPct')) settings.postPct = Math.round(clampNum(g('setPostPct').value, 0, 100, 8));
   if (g('setNudgePct')) settings.nudgeBackPct = Math.round(clampNum(g('setNudgePct').value, 0, 100, 60));
   if (g('setNudgeInPct')) settings.nudgePct = Math.round(clampNum(g('setNudgeInPct').value, 0, 100, 4));
+  if (g('setStickerPct')) settings.stickerPct = Math.round(clampNum(g('setStickerPct').value, 0, 100, 8));
   if (g('setInvitePct')) settings.invitePct = Math.round(clampNum(g('setInvitePct').value, 0, 100, 40));
   if (g('setLetterGap')) settings.letterGapMin = Math.round(clampNum(g('setLetterGap').value, 5, 1440, 240));
   if (g('setLetterPct')) settings.letterPct = Math.round(clampNum(g('setLetterPct').value, 0, 100, 60));
@@ -5963,6 +5979,7 @@ function msgSearchText(m) {
   if (m.type === 'nudge') return '拍了拍 ' + String(m.text || '');
   if (m.type === 'survey') return '问卷';
   if (m.type === 'residue') return '残影';
+  if (m.type === 'image') return '表情包';
   return '';
 }
 function renderStList() {
