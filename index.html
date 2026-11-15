@@ -490,6 +490,12 @@ button:focus,button:active{outline:none}
 .stg-sub{font-size:12px;color:#7b8a9d}
 .stg-top{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .stg-top span{font-size:11px;color:#5f6f82;background:#f1f5fa;border-radius:8px;padding:3px 7px}
+.nudge-modal{max-width:368px}
+.nudge-list{display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow-y:auto}
+.nudge-pick{display:flex;align-items:baseline;justify-content:space-between;gap:10px;width:100%;text-align:left;
+  border:1px solid var(--line);background:#fff;border-radius:12px;padding:11px 13px;font-size:14px;color:#23313f}
+.nudge-pick span{flex:1;min-width:0}
+.nudge-pick small{flex:0 0 auto;font-size:11px;color:#8a98a8}
 .page-dots{position:absolute;left:0;right:0;bottom:calc(82px + env(safe-area-inset-bottom));z-index:22;
   display:flex;justify-content:center;gap:9px}
 .page-dots button{position:relative;width:7px;height:7px;border-radius:50%;border:none;
@@ -2409,15 +2415,46 @@ function deliverReply(pool) {
   }
   pushMessage({ id: uid(), sender: 'them', type: 'text', text: text, ts: Date.now() });
 }
-function sendNudge() {
+function sendNudge(text) {
   const pool = data.nudges.filter(n => n.text && String(n.text).trim());
-  const mine = pool.length ? pickRandom(pool) : null;
+  const mine = text ? { text: text } : (pool.length ? pickRandom(pool) : null);
   pushMessage({ id: uid(), sender: 'me', type: 'nudge', text: mine ? mine.text : '', ts: Date.now() });
   setTimeout(() => {
     const back = pool.length ? pickRandom(pool) : null;
     pushMessage({ id: uid(), sender: 'them', type: 'nudge', text: back ? back.text : '', ts: Date.now() });
   }, 1400 + Math.random() * 1200);
   toast('拍了拍 ' + (settings.themName || 'TA'));
+}
+function openNudgePicker() {
+  const pool = data.nudges.filter(n => n.text && String(n.text).trim());
+  if (!pool.length) { toast('拍一拍还是空的，先去字卡 → 拍一拍里加几条'); return; }
+  document.querySelectorAll('.modal-mask').forEach(n => n.remove());
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  const groupName = id => {
+    const g = grp.nudges.find(x => x.id === id);
+    return g ? g.name : '';
+  };
+  let list = '';
+  pool.forEach(n => {
+    const gname = groupName(n.groupId);
+    list += '<button type="button" class="nudge-pick" data-id="' + n.id + '"><span>' + esc(n.text) + '</span>'
+      + (gname ? '<small>' + esc(gname) + '</small>' : '') + '</button>';
+  });
+  mask.innerHTML = '<div class="modal nudge-modal"><h3>选一个拍一拍</h3>'
+    + '<div class="modal-body"><div class="nudge-list">' + list + '</div></div>'
+    + '<div class="modal-foot"><button class="btn ghost" id="nudgeRandom" type="button">随便拍一个</button>'
+    + '<button class="btn primary" id="nudgeCancel" type="button">取消</button></div></div>';
+  document.body.appendChild(mask);
+  mask.querySelectorAll('.nudge-pick').forEach(b => {
+    b.onclick = () => {
+      const rec = pool.find(x => x.id === b.dataset.id);
+      mask.remove();
+      sendNudge(rec ? rec.text : '');
+    };
+  });
+  $('nudgeRandom').onclick = () => { mask.remove(); sendNudge(''); };
+  $('nudgeCancel').onclick = () => mask.remove();
 }
 /* ---------------- 消息操作 ---------------- */
 function openMessageActions(m) {
@@ -3274,7 +3311,7 @@ function renderSetContent() {
       + '<input type="file" id="importFile" accept=".json,application/json" style="display:none">'
       + setRow('导入聊天记录', '<button class="mini" id="setImportChat" type="button">选择文件</button>')
       + '<input type="file" id="chatImportFile" accept=".json,application/json" style="display:none">'
-      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v21 · 2026-11-15</div>'
+      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v22 · 2026-11-15</div>'
       + '</div>'
       + '<div class="set-card" style="margin-top:10px"><div class="beauty-h">存储空间</div>'
       + '<div class="stg-box" id="setStorage"><div class="set-tip">计算中…</div></div>'
@@ -6362,7 +6399,7 @@ function bindEvents() {
   $('chatBack').onclick = () => switchPage('pageHome');
   $('btnSend').onclick = sendText;
   $('btnCall').onclick = () => startCall('out');
-  $('btnNudge').onclick = sendNudge;
+  $('btnNudge').onclick = openNudgePicker;
   $('btnPacket').onclick = openPacketCompose;
   $('btnImage').onclick = () => pickImages(urls => {
     urls.forEach((src, i) => setTimeout(() => sendImageMessage(src), i * 160));
