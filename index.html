@@ -1689,20 +1689,30 @@ const Store = {
     if (this.ok && this.db) {
       try {
         const store = this.db.transaction('kv', 'readonly').objectStore('kv');
-        const keys = await new Promise((res, rej) => { const r = store.getAllKeys(); r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error); });
-        const vals = await new Promise((res, rej) => { const r = store.getAll(); r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error); });
-        keys.forEach((k, i) => { this.mem[k] = vals[i]; });
+        const keysReq = store.getAllKeys();
+        const valsReq = store.getAll();
+        const loaded = await new Promise((res, rej) => {
+          let keys = null, vals = null, done = 0;
+          const finish = () => { if (++done === 2) res([keys, vals]); };
+          keysReq.onsuccess = () => { keys = keysReq.result || []; finish(); };
+          valsReq.onsuccess = () => { vals = valsReq.result || []; finish(); };
+          const fail = () => rej(new Error('idb read fail'));
+          keysReq.onerror = fail; valsReq.onerror = fail;
+        });
+        loaded[0].forEach((k, i) => { this.mem[k] = loaded[1][i]; });
       } catch (e) {}
     }
     for (let i = 0; i < localStorage.length; i++) {
       const full = localStorage.key(i);
       if (!full || full.indexOf('xubing_') !== 0) continue;
       const k = full.slice(7);
-      if (k in this.mem) continue;
-      try {
-        this.mem[k] = JSON.parse(localStorage.getItem(full));
-        this.put(k, this.mem[k]);
-      } catch (e) {}
+      let val;
+      try { val = JSON.parse(localStorage.getItem(full)); } catch (e) { continue; }
+      const cur = this.mem[k];
+      const both = Array.isArray(val) && Array.isArray(cur);
+      if (k in this.mem && !(both && val.length > cur.length)) continue;
+      this.mem[k] = val;
+      this.put(k, val);
     }
   },
   put(k, v) {
@@ -3321,7 +3331,7 @@ function renderSetContent() {
       + '<input type="file" id="importFile" accept=".json,application/json" style="display:none">'
       + setRow('导入聊天记录', '<button class="mini" id="setImportChat" type="button">选择文件</button>')
       + '<input type="file" id="chatImportFile" accept=".json,application/json" style="display:none">'
-      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v24 · 2026-11-15</div>'
+      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v25 · 2026-11-15</div>'
       + '</div>'
       + '<div class="set-card" style="margin-top:10px"><div class="beauty-h">存储空间</div>'
       + '<div class="stg-box" id="setStorage"><div class="set-tip">计算中…</div></div>'
