@@ -1745,7 +1745,7 @@ const DEFAULT_SETTINGS = {
   loveStartDate: '2023-05-21', loveDays: '520',
   replyCount: 1, delayMinSec: 8, delayMaxSec: 90,
   proMsgPct: 12, packetPct: 6, callPct: 4, todoRemindPct: 10, surveyPct: 5, surveyDelaySec: 8,
-  shopPayPct: 18, askMoneyPct: 6, payCardKind: 'cards',
+  shopPayPct: 18, askMoneyPct: 6, nudgeBackPct: 60, nudgePct: 4, payCardKind: 'cards',
   joinCards: true, joinCount: 2, cycleDays: 28, periodLen: 5, residuePct: 4,
   ghostPct: 12, postPct: 8, invitePct: 40, letterGapMin: 240, letterPct: 60, letterMin: 2, letterMax: 4,
   bubbleColor: '#4d80a1', themBubbleColor: '#ffffff', homeTop: '#a9c6da', homeBot: '#ffffff', bubbleRadius: 14, fontScale: 100,
@@ -2419,10 +2419,12 @@ function sendNudge(text) {
   const pool = data.nudges.filter(n => n.text && String(n.text).trim());
   const mine = text ? { text: text } : (pool.length ? pickRandom(pool) : null);
   pushMessage({ id: uid(), sender: 'me', type: 'nudge', text: mine ? mine.text : '', ts: Date.now() });
-  setTimeout(() => {
-    const back = pool.length ? pickRandom(pool) : null;
-    pushMessage({ id: uid(), sender: 'them', type: 'nudge', text: back ? back.text : '', ts: Date.now() });
-  }, 1400 + Math.random() * 1200);
+  if (Math.random() * 100 < pct(settings.nudgeBackPct)) {
+    setTimeout(() => {
+      const back = pool.length ? pickRandom(pool) : null;
+      pushMessage({ id: uid(), sender: 'them', type: 'nudge', text: back ? back.text : '', ts: Date.now() });
+    }, 1400 + Math.random() * 1200);
+  }
   toast('拍了拍 ' + (settings.themName || 'TA'));
 }
 function openNudgePicker() {
@@ -3032,6 +3034,7 @@ function tickAuto() {
   let acc = pc;
   if (r < acc) { startCall('in'); return; }
   acc += pp; if (r < acc) { receivePacket(); return; }
+  acc += pct(settings.nudgePct); if (r < acc) { themNudge(); return; }
   acc += pv; if (r < acc) { proactiveSurvey(); return; }
   acc += pt; if (r < acc) { remindTodo(); return; }
   acc += ps; if (r < acc) { if (cart.length) { themPayCart(); return; } }
@@ -3043,6 +3046,11 @@ function tickAuto() {
     if (it) { it.sender = 'them'; pushMessage({ id: uid(), sender: 'them', type: 'residue', item: it, ts: Date.now() }); }
     return;
   }
+}
+function themNudge() {
+  const pool = data.nudges.filter(n => n.text && String(n.text).trim());
+  const it = pool.length ? pickRandom(pool) : null;
+  pushMessage({ id: uid(), sender: 'them', type: 'nudge', text: it ? it.text : '', ts: Date.now() });
 }
 function autoMessage() {
   const pool = getReplyPool();
@@ -3261,8 +3269,10 @@ function renderSetContent() {
       + setRow('发问卷', setNum('setSvPct', Number(settings.surveyPct) || 0, 0, 100))
       + setRow('发朋友圈', setNum('setPostPct', Number(settings.postPct) || 0, 0, 100))
       + setRow('陪伴主动邀请', setNum('setInvitePct', Number(settings.invitePct) || 0, 0, 100))
+      + setRow('被拍后回拍', setNum('setNudgePct', Number(settings.nudgeBackPct) || 0, 0, 100))
+      + setRow('主动拍我', setNum('setNudgeInPct', Number(settings.nudgePct) || 0, 0, 100))
       + '</div>';
-    tip = '每 30–80 秒判定一次，单位是 %。写 0 就是不让 TA 主动做这件事。';
+    tip = '每 30–80 秒判定一次，单位是 %。写 0 就是不让 TA 主动做这件事；「被拍后回拍」只在你拍完他之后判定，「主动拍我」是他自己来拍你。';
   } else if (setCat === 'shop') {
     const kindOpts = Object.keys(KIND_META).map(k =>
       '<option value="' + k + '"' + (settings.payCardKind === k ? ' selected' : '') + '>' + KIND_META[k].label + '</option>').join('');
@@ -3311,7 +3321,7 @@ function renderSetContent() {
       + '<input type="file" id="importFile" accept=".json,application/json" style="display:none">'
       + setRow('导入聊天记录', '<button class="mini" id="setImportChat" type="button">选择文件</button>')
       + '<input type="file" id="chatImportFile" accept=".json,application/json" style="display:none">'
-      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v22 · 2026-11-15</div>'
+      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v24 · 2026-11-15</div>'
       + '</div>'
       + '<div class="set-card" style="margin-top:10px"><div class="beauty-h">存储空间</div>'
       + '<div class="stg-box" id="setStorage"><div class="set-tip">计算中…</div></div>'
@@ -3420,6 +3430,8 @@ function collectSettings() {
   }
   if (g('setGhost')) settings.ghostPct = Math.round(clampNum(g('setGhost').value, 0, 100, 0));
   if (g('setPostPct')) settings.postPct = Math.round(clampNum(g('setPostPct').value, 0, 100, 8));
+  if (g('setNudgePct')) settings.nudgeBackPct = Math.round(clampNum(g('setNudgePct').value, 0, 100, 60));
+  if (g('setNudgeInPct')) settings.nudgePct = Math.round(clampNum(g('setNudgeInPct').value, 0, 100, 4));
   if (g('setInvitePct')) settings.invitePct = Math.round(clampNum(g('setInvitePct').value, 0, 100, 40));
   if (g('setLetterGap')) settings.letterGapMin = Math.round(clampNum(g('setLetterGap').value, 5, 1440, 240));
   if (g('setLetterPct')) settings.letterPct = Math.round(clampNum(g('setLetterPct').value, 0, 100, 60));
