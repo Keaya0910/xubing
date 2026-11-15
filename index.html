@@ -2282,10 +2282,11 @@ function pushMessage(m) {
   }
   if (isChatOpen()) markChatRead();
   renderHome();
-  if (m.sender === 'them' && m.type === 'text') {
+  if (m.sender === 'them') {
+    const preview = msgSearchText(m) || m.text || '发来一条消息';
     playDing();
-    dingNotice(m.text || '发来一条消息');
-    if (!isChatOpen()) maybeNotify('chat', settings.themName || '他', m.text || '发来一条消息');
+    dingNotice(preview);
+    if (!isChatOpen()) maybeNotify('chat', settings.themName || '他', preview);
   }
   if (companion.on && $('pcLayer') && !$('pcLayer').classList.contains('hidden')) renderPcMsgs();
   if (messages.length >= 6 && messages.length % 9 === 0) {
@@ -2372,12 +2373,7 @@ function receivePacket() {
 /* ---------------- 自动回复 ---------------- */
 function getReplyPool() {
   const offGroups = (grp.cards || []).filter(g => g.off).map(g => g.id);
-  let pool = data.cards.filter(c => c.text && String(c.text).trim() && offGroups.indexOf(c.groupId) < 0);
-  if (!settings.useAllGroups) {
-    const ag = settings.activeGroups || [];
-    pool = ag.length ? pool.filter(c => ag.indexOf(c.groupId) >= 0) : [];
-  }
-  return pool;
+  return data.cards.filter(c => c.text && String(c.text).trim() && offGroups.indexOf(c.groupId) < 0);
 }
 function markLastMineRead(ghost) {
   const last = [...messages].reverse().find(m => m.sender === 'me' && m.type === 'text');
@@ -3321,8 +3317,11 @@ function renderSetContent() {
       + setRow('待办通知', '<input type="checkbox" id="setNotifTodo" ' + (settings.notifTodo ? 'checked' : '') + ' style="transform:scale(1.15)">')
       + setRow('睡眠通知', '<input type="checkbox" id="setNotifSleep" ' + (settings.notifSleep ? 'checked' : '') + ' style="transform:scale(1.15)">')
       + '</div>'
+      + '<div class="set-card" style="margin-top:10px">'
+      + setRow('系统通知', '<button class="mini primary" id="btnNotifPerm" type="button">开启</button>')
+      + '</div>'
       + '<button class="btn ghost" id="btnNotifTest" type="button" style="width:100%;margin-top:8px">发一条测试通知</button>';
-    tip = '后台维持会循环播一段静音音频，让浏览器尽量不把页面休眠；系统通知需要你先允许权限。';
+    tip = '后台维持会循环播一段静音音频，让浏览器尽量不把页面休眠。系统通知：点「开启」允许后，页面切到后台时新消息会像微信一样弹在网页外面。网页文件夹里要同时放 sw.js（和 index.html 同一目录），否则安卓弹不出来；iPhone 浏览器不支持网页系统通知。';
   } else if (setCat === 'survey') {
     html = '<div class="set-card">'
       + setRow('作答间隔(秒)', setNum('setSvDelay', Number(settings.surveyDelaySec) || 8, 0, 120))
@@ -3341,7 +3340,7 @@ function renderSetContent() {
       + '<input type="file" id="importFile" accept=".json,application/json" style="display:none">'
       + setRow('导入聊天记录', '<button class="mini" id="setImportChat" type="button">选择文件</button>')
       + '<input type="file" id="chatImportFile" accept=".json,application/json" style="display:none">'
-      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v26 · 2026-11-15</div>'
+      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v28 · 2026-11-15</div>'
       + '</div>'
       + '<div class="set-card" style="margin-top:10px"><div class="beauty-h">存储空间</div>'
       + '<div class="stg-box" id="setStorage"><div class="set-tip">计算中…</div></div>'
@@ -3389,6 +3388,15 @@ function renderSetContent() {
   if (ic) ic.onclick = () => { const f = $('chatImportFile'); if (f) f.click(); };
   const icf = $('chatImportFile');
   if (icf) icf.onchange = () => { if (icf.files && icf.files[0]) importChatLog(icf.files[0]); };
+  const np = $('btnNotifPerm');
+  if (np) {
+    const paint = () => {
+      if (!('Notification' in window)) { np.textContent = '不支持'; return; }
+      np.textContent = Notification.permission === 'granted' ? '已开启' : (Notification.permission === 'denied' ? '被拒绝' : '开启');
+    };
+    paint();
+    np.onclick = async () => { await requestNotifPermission(); paint(); };
+  }
   const nt = $('btnNotifTest');
   if (nt) nt.onclick = () => {
     requestNotifPermission();
@@ -4317,7 +4325,8 @@ function genMoneyEvent() {
     return;
   }
   const amount = pickRandom([20, 30, 52, 66, 88, 100]);
-  const line = pickRandom(ASK_LINES).replace('{n}', String(amount));
+  const moneyPool = (data.money || []).filter(m => m.text && String(m.text).trim());
+  const line = (moneyPool.length ? pickRandom(moneyPool).text : pickRandom(ASK_LINES)).replace('{n}', String(amount));
   moneyAsks.unshift({ id: localId(), ts: Date.now(), amount: amount, line: line, status: 'pending' });
   DB.set('moneyAsks', moneyAsks);
   pushMessage({ id: uid(), sender: 'them', type: 'text', text: line, ts: Date.now() });
@@ -5319,23 +5328,50 @@ function popupNotice(title, text, buttons) {
     };
   });
 }
+let notifySwUrl = null;
+async function ensureNotifySw() {
+  if (!('serviceWorker' in navigator)) return null;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (reg) return reg;
+  } catch (e) {}
+  try {
+    notifySwUrl = './sw.js';
+    return await navigator.serviceWorker.register(notifySwUrl);
+  } catch (e) { return null; }
+}
+async function showSystemNotif(title, body) {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission !== 'granted') return false;
+  const reg = await ensureNotifySw();
+  if (reg && typeof reg.showNotification === 'function') {
+    try { await reg.showNotification(title, { body: body || '', tag: 'xubing-chat', renotify: true, silent: false }); return true; } catch (e) {}
+  }
+  try {
+    const n = new Notification(title, { body: body || '', tag: 'xubing-chat', silent: false });
+    n.onclick = () => { try { window.focus(); switchPage('pageChat'); } catch (e) {} n.close(); };
+    return true;
+  } catch (e) {}
+  return false;
+}
 function maybeNotify(cat, title, body) {
   const map = { chat: 'notifChat', space: 'notifSpace', todo: 'notifTodo', sleep: 'notifSleep' };
   const key = map[cat];
   if (!key || !settings[key]) return;
-  try {
-    if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    new Notification(title, { body: body || '', silent: false });
-  } catch (e) {}
+  showSystemNotif(title, body);
 }
 function requestNotifPermission() {
-  try {
-    if (!('Notification' in window)) { toast('这个环境不支持系统通知'); return; }
-    if (Notification.permission === 'default') {
-      Notification.requestPermission().then(p => toast(p === 'granted' ? '通知已允许' : '通知被拒绝了'));
-    } else if (Notification.permission === 'granted') toast('通知已允许');
-    else toast('通知权限被拒绝，可在浏览器设置里放开');
-  } catch (e) {}
+  return new Promise(resolve => {
+    if (!('Notification' in window)) { toast('这个浏览器不支持系统通知'); resolve('no'); return; }
+    if (Notification.permission === 'granted') { toast('系统通知已开启'); resolve('granted'); return; }
+    if (Notification.permission === 'denied') { toast('通知被拒绝了，去浏览器设置里放行'); resolve('denied'); return; }
+    try {
+      Promise.resolve(Notification.requestPermission()).then(p => {
+        toast(p === 'granted' ? '系统通知已开启' : '通知被拒绝了');
+        resolve(p);
+      });
+    } catch (e) { resolve('error'); }
+  });
 }
 function setBgKeep(on) {
   settings.bgKeep = on;
@@ -6490,7 +6526,13 @@ function bindEvents() {
   $('btnDial').onclick = () => startCall('out');
 }
 
-(async () => { await Store.load(); init(); })();
+(async () => {
+  await Store.load();
+  init();
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
+})();
 </script>
 </body>
 </html>
