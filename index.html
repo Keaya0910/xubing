@@ -2661,8 +2661,8 @@ function openBatchImport() {
   mask.className = 'modal-mask';
   mask.innerHTML = '<div class="modal"><h3>批量导入' + KIND_META[cardKind].label
     + '</h3><div class="modal-body"><textarea class="batch-area" id="bTxt" placeholder="每行一条，重复的会自动跳过"></textarea>'
-    + '<button class="mini" id="bJson" type="button" style="margin-top:9px">导入 .json 字卡文件</button>'
-    + '<div class="set-tip">支持字卡备份（含 customReplyGroups 的 JSON）；会按原分组归到「字卡」里，重复的自动跳过。</div>'
+    + '<button class="mini" id="bJson" type="button" style="margin-top:9px">导入 .json 备份文件</button>'
+    + '<div class="set-tip">支持字卡、状态、拍一拍、安慰、寻踪的备份 JSON（customReplyGroups / customStatuses / customNudges / customComforts / customWhere 都能识别），重复的自动跳过。</div>'
     + '</div><div class="modal-foot"><button class="btn ghost" id="bCancel" type="button">取消</button>'
     + '<button class="btn primary" id="bGo" type="button">导入</button></div></div>';
   document.body.appendChild(mask);
@@ -2674,12 +2674,11 @@ function openBatchImport() {
     inp.onchange = () => {
       const f = inp.files && inp.files[0];
       if (!f) return;
-      importCardJson(f, (added, groups, err) => {
+      importCardJson(f, (added, groups, err, detail) => {
         mask.remove();
         if (err) { toast('这个文件读不出来，格式不支持'); return; }
-        cardKind = 'cards';
         renderCardPanel();
-        toast(added ? ('导入 ' + added + ' 条，新增 ' + groups + ' 组') : '没有新内容，重复的都跳过了');
+        toast(added ? ('导入 ' + added + ' 条' + (detail ? '（' + detail + '）' : '') + (groups ? '，新增 ' + groups + ' 组' : '')) : '没有新内容，重复的都跳过了');
       });
     };
     inp.click();
@@ -3218,7 +3217,7 @@ function renderSetContent() {
       + '<input type="file" id="importFile" accept=".json,application/json" style="display:none">'
       + setRow('导入聊天记录', '<button class="mini" id="setImportChat" type="button">选择文件</button>')
       + '<input type="file" id="chatImportFile" accept=".json,application/json" style="display:none">'
-      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v19 · 2026-11-15</div>'
+      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v20 · 2026-11-15</div>'
       + '</div>';
     tip = '清空只作用于本机；「全部导出」会把聊天、字卡、资产、朋友圈等打包成 JSON。「导入聊天记录」支持本空间备份，也支持 mochi 导出的聊天 json（图片和表情会跳过）。';
   }
@@ -6074,51 +6073,65 @@ function scheduleResidue() {
 function importCardJson(file, cb) {
   const fr = new FileReader();
   fr.onload = () => {
-    let added = 0, groups = 0;
+    let added = 0, groups = 0, detail = [];
     try {
       const j = JSON.parse(String(fr.result || '{}'));
-      const gl = Array.isArray(j.customReplyGroups) ? j.customReplyGroups : [];
-      const loose = Array.isArray(j.customReplies) ? j.customReplies : [];
-      const all = new Set(data.cards.map(c => norm(c.text)));
-      gl.forEach(g => {
-        const name = String(g.name || '导入分组').trim().slice(0, 14) || '导入分组';
-        let target = grp.cards.find(x => x.name === name);
-        if (!target) { target = { id: uid(), name: name, ts: Date.now() }; grp.cards.push(target); groups++; }
-        (Array.isArray(g.items) ? g.items : []).forEach(t => {
+      const touched = new Set();
+      const kindGroup = k => {
+        if (!grp[k].length) { grp[k] = [{ id: uid(), name: '常用', ts: Date.now() }]; groups++; }
+        return grp[k][0];
+      };
+      const addLoose = (k, arr, groupName) => {
+        if (!Array.isArray(arr) || !arr.length) return;
+        if (!KIND_META[k] || !data[k]) return;
+        let g = null;
+        if (groupName) { g = grp[k].find(x => x.name === groupName); if (!g) { g = { id: uid(), name: groupName, ts: Date.now() }; grp[k].push(g); groups++; } }
+        if (!g) g = kindGroup(k);
+        const have = new Set(data[k].map(c => norm(c.text)));
+        let n = 0;
+        arr.forEach(t => {
           const txt = String(t == null ? '' : t).trim();
           if (!txt) return;
           const key = norm(txt);
-          if (all.has(key)) return;
-          all.add(key);
-          data.cards.push({ id: uid(), groupId: target.id, text: txt, ts: Date.now() });
-          added++;
+          if (have.has(key)) return;
+          have.add(key);
+          data[k].push({ id: uid(), groupId: g.id, text: txt, ts: Date.now() });
+          n++; added++;
         });
+        touched.add(k);
+        if (n) detail.push(KIND_META[k].label + ' ' + n);
+      };
+
+      if (Array.isArray(j.customReplyGroups)) {
+        j.customReplyGroups.forEach(g => {
+          const name = String(g && g.name || '导入分组').trim().slice(0, 14) || '导入分组';
+          addLoose('cards', Array.isArray(g && g.items) ? g.items : [], name);
+        });
+      }
+      const FLAT = {
+        customReplies: 'cards', replies: 'cards',
+        customStatuses: 'statuses', statuses: 'statuses',
+        customNudges: 'nudges', nudges: 'nudges',
+        customComforts: 'comfort', comforts: 'comfort', comfort: 'comfort',
+        customWhere: 'where', whereCards: 'where', where: 'where'
+      };
+      Object.keys(FLAT).forEach(key => {
+        if (Array.isArray(j[key])) addLoose(FLAT[key], j[key], '');
       });
-      if (loose.length) {
-        const first = grp.cards[0];
-        if (first) {
-          loose.forEach(t => {
-            const txt = String(t == null ? '' : t).trim();
-            if (!txt) return;
-            const key = norm(txt);
-            if (all.has(key)) return;
-            all.add(key);
-            data.cards.push({ id: uid(), groupId: first.id, text: txt, ts: Date.now() });
-            added++;
-          });
-        }
-      }
-      if (added) {
-        saveItems('cards', data.cards);
-        saveGroups('cards', grp.cards);
-      }
-      if (added && gid.cards && !grp.cards.find(g => g.id === gid.cards)) gid.cards = grp.cards[0].id;
-      cb(added, groups, null);
+      const GRP = { customStatusGroups: 'statuses', statusGroups: 'statuses', customNudgeGroups: 'nudges', nudgeGroups: 'nudges', customComfortGroups: 'comfort', comfortGroups: 'comfort', customWhereGroups: 'where', whereGroups: 'where' };
+      Object.keys(GRP).forEach(key => {
+        if (Array.isArray(j[key])) j[key].forEach(g => addLoose(GRP[key], Array.isArray(g && g.items) ? g.items : [], String(g && g.name || '').slice(0, 14)));
+      });
+
+      touched.forEach(k => { saveItems(k, data[k]); saveGroups(k, grp[k]); });
+      if (touched.has(cardKind) && gid[cardKind] && !grp[cardKind].find(g => g.id === gid[cardKind])) gid[cardKind] = grp[cardKind][0].id;
+      if (touched.has('cards')) renderStickers();
+      cb(added, groups, null, detail.join(' · '));
     } catch (e) {
-      cb(0, 0, e);
+      cb(0, 0, e, '');
     }
   };
-  fr.onerror = () => cb(0, 0, new Error('读取失败'));
+  fr.onerror = () => cb(0, 0, new Error('读取失败'), '');
   fr.readAsText(file);
 }
 
