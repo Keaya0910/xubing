@@ -1252,6 +1252,7 @@ button:focus,button:active{outline:none}
         <button class="chip" data-kind="comfort" type="button">安慰</button>
         <button class="chip" data-kind="where" type="button">寻踪</button>
         <button class="chip" data-kind="money" type="button">要钱</button>
+        <button class="chip" data-kind="thanks" type="button">收钱</button>
       </div>
       <div class="group-tabs" id="groupTabs"></div>
       <div class="search-row"><input id="cardSearch" type="search" placeholder="搜索当前分组"></div>
@@ -1781,6 +1782,14 @@ const SEED = {
     '有笔开销赶上了，跟你开个口，方便的话先垫一下。',
     '钱包空了，不跟你绕弯子，借我一点，我记着这笔。',
     '这次真得麻烦你，下个月发下来就还。'
+  ],
+  thanks: [
+    '收到了，谢谢。改天我请你吃饭。',
+    '好，这笔我记下了，月底前还你。',
+    '钱到了，谢谢，我尽快安排上。',
+    '嗯，救急了，回头我一起还你。',
+    '谢谢，不多说，记在心里了。',
+    '收到了。你自己别省着，该花就花。'
   ]
 };
 const KIND_META = {
@@ -1789,14 +1798,15 @@ const KIND_META = {
   nudges: { itemsKey: 'nudges', groupsKey: 'nudgeGroups', label: '拍一拍' },
   statuses: { itemsKey: 'statuses', groupsKey: 'statusGroups', label: '状态' },
   comfort: { itemsKey: 'comforts', groupsKey: 'comfortGroups', label: '安慰' },
-  money: { itemsKey: 'moneyCards', groupsKey: 'moneyGroups', label: '要钱' }
+  money: { itemsKey: 'moneyCards', groupsKey: 'moneyGroups', label: '要钱' },
+  thanks: { itemsKey: 'thanksCards', groupsKey: 'thanksGroups', label: '收钱' }
 };
 
 /* ---------------- 状态 ---------------- */
 let settings = {}, messages = [], stickers = [], calls = [], letters = [];
-const data = { cards: [], nudges: [], statuses: [], comfort: [], where: [], money: [] };
-const grp = { cards: [], nudges: [], statuses: [], comfort: [], where: [], money: [] };
-const gid = { cards: null, nudges: null, statuses: null, comfort: null, where: null, money: null };
+const data = { cards: [], nudges: [], statuses: [], comfort: [], where: [], money: [], thanks: [] };
+const grp = { cards: [], nudges: [], statuses: [], comfort: [], where: [], money: [], thanks: [] };
+const gid = { cards: null, nudges: null, statuses: null, comfort: null, where: null, money: null, thanks: null };
 let cardKind = 'cards', cardQuery = '', lastCardId = null, pending = 0;
 const selectedIds = new Set();
 let currentQuote = null, activePanel = null, lettersBox = 'in';
@@ -2590,7 +2600,7 @@ function renderCardPanel() {
   document.querySelectorAll('#kindSwitch .chip').forEach(b => {
     b.classList.toggle('active', b.dataset.kind === cardKind);
   });
-  const ph = { cards: '写一句 TA 会说的话，回车添加', nudges: '写一个动作，例如：并摸了摸头', statuses: '写一个 TA 此刻的状态，例如：在线', comfort: '写一句安慰的话，经期页会用上', where: '写一句他在哪、在做什么', money: '写一句他开口借钱会说的话' };
+  const ph = { cards: '写一句 TA 会说的话，回车添加', nudges: '写一个动作，例如：并摸了摸头', statuses: '写一个 TA 此刻的状态，例如：在线', comfort: '写一句安慰的话，经期页会用上', where: '写一句他在哪、在做什么', money: '写一句他开口借钱会说的话', thanks: '写一句他收到钱会说的话' };
   $('cardInput').placeholder = ph[cardKind];
   renderGroupTabs();
   renderCards();
@@ -3331,7 +3341,7 @@ function renderSetContent() {
       + '<input type="file" id="importFile" accept=".json,application/json" style="display:none">'
       + setRow('导入聊天记录', '<button class="mini" id="setImportChat" type="button">选择文件</button>')
       + '<input type="file" id="chatImportFile" accept=".json,application/json" style="display:none">'
-      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v25 · 2026-11-15</div>'
+      + '<div class="set-tip" style="text-align:center;margin-top:6px">当前版本 v26 · 2026-11-15</div>'
       + '</div>'
       + '<div class="set-card" style="margin-top:10px"><div class="beauty-h">存储空间</div>'
       + '<div class="stg-box" id="setStorage"><div class="set-tip">计算中…</div></div>'
@@ -4326,7 +4336,9 @@ function answerAsk(id, ok) {
     DB.set('moneyAsks', moneyAsks);
     addLedger('me', -a.amount, '给了他一笔零花钱', '转账');
     addLedger('them', a.amount, '收到你给的零花钱', '转账');
-    pushMessage({ id: uid(), sender: 'them', type: 'text', text: '谢谢宝宝！你最好了呜。', ts: Date.now() });
+    const thanksPool = data.thanks.filter(t => t.text && String(t.text).trim());
+    const thanks = thanksPool.length ? pickRandom(thanksPool).text : '收到了，谢谢。';
+    pushMessage({ id: uid(), sender: 'them', type: 'text', text: thanks, ts: Date.now() });
   } else {
     a.status = 'rejected';
     DB.set('moneyAsks', moneyAsks);
@@ -6267,7 +6279,7 @@ function importCardJson(file, cb) {
       const FLAT = {
         customReplies: 'cards', replies: 'cards',
         customStatuses: 'statuses', statuses: 'statuses',
-        customNudges: 'nudges', nudges: 'nudges',
+        customNudges: 'nudges', nudges: 'nudges', customThanks: 'thanks', thanks: 'thanks',
         customComforts: 'comfort', comforts: 'comfort', comfort: 'comfort',
         customWhere: 'where', whereCards: 'where', where: 'where'
       };
